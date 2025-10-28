@@ -1,0 +1,43 @@
+head {
+    grid-column: 1 / 13;
+    grid-row: 1;
+  }
+  
+main {
+    grid-column: 4 / 13;
+    grid-row: 2;
+  }
+  
+menu {
+    grid-column: 1 / 4;
+    grid-row: 2;
+  }
+  
+footer {
+    grid-column: 1 / 13;
+    grid-row: 3;
+  }
+body {
+    width: 90%;
+    max-width: 900px;
+    margin: 2em auto;
+    font: .9em/1.2 Arial, Helvetica, sans-serif;
+}
+
+.grid-container {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0,1fr));
+    gap: 20px;
+}
+
+grid-header,
+grid-footer {
+    border-radius: 5px;
+    padding: 10px;
+    background-color: rgb(207,232,220);
+    border: 2px solid rgb(79,185,227);
+}
+
+grid-menu {
+    border-right: 1px solid #999;
+}
