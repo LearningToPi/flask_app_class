@@ -1,7 +1,3 @@
-from gevent import monkey
-monkey.patch_all()
-from .monkey_patch import patch_wsgihandler
-patch_wsgihandler()
 from flask import Flask, render_template, send_from_directory, g, session, send_file
 from flask import Flask, flash, redirect, render_template, request, session, abort, url_for
 from flask_login import LoginManager, login_user, current_user, logout_user, login_required
@@ -9,13 +5,15 @@ from urllib.parse import urlparse, urljoin
 import os
 import json
 import inspect
+import logging
 from datetime import datetime, timedelta
 from threading import Lock, Thread
 from time import sleep
+import uuid
 import re, glob
 from flask_socketio import SocketIO, emit, disconnect
 from werkzeug.middleware.proxy_fix import ProxyFix
-from logging_handler import create_logger, DEBUG, INFO
+from logging_handler import create_logger, DEBUG, INFO, WARNING, ERROR, CRITICAL, _log_level_number
 
 '''
 ==================================
@@ -34,9 +32,21 @@ def load_config_json(config_file:str):
         config_data = json.loads(input_file.read())
     return config_data
 
+
+class FlaskLogFilter(logging.Filter):
+    ''' Class to handle filtering of web log mess '''
+    log_filter_list = []
+    
+    def filter(self, record):
+        ''' Filter out selected log messages - returns FALSE if message should be filtered '''
+        for filter in self.log_filter_list:
+            if filter in record.getMessage():
+                return False
+        return True # don't filter!
+
 class FlaskApp:
     ''' Class to hold and manage all the general flask related data and functions '''
-    def __init__(self, config_file:str, flask_logger=None, app_logger=None, app_path=None,
+    def __init__(self, config_file:str|None=None, web_log_level:str=INFO, app_log_level:str=INFO, app_path=None,
                  templates_path=os.path.join(os.path.dirname(__file__), 'templates')):
         # app config
         self.config_file = config_file
@@ -54,24 +64,25 @@ class FlaskApp:
         self.socketio = None
         self.user_controller = None
 
-        # configure loggers
-        if type(flask_logger).__name__ != 'RootLogger' or type(flask_logger).__name__ != 'Logger' or flask_logger is None:
-            self.flask_logger = create_logger(INFO)
-        else:
-            self.flask_logger = flask_logger
-        if type(app_logger).__name__ != 'RootLogger' or type(app_logger).__name__ != 'Logger' or app_logger is None:
-            self.app_logger = create_logger(DEBUG, name=__name__)
-        else:
-            self.app_logger = app_logger
+        # save log levels
+        self.web_log_level = web_log_level if web_log_level in [DEBUG, INFO, WARNING, ERROR, CRITICAL] else INFO
+        self.app_log_level = app_log_level if app_log_level in [DEBUG, INFO, WARNING, ERROR, CRITICAL] else INFO
+        self.flask_logger = create_logger(console_level=self.app_log_level)
+        self.app_logger = create_logger(console_level=self.app_log_level, name=__name__)
 
         # create list of web pages and API url's
         self.web_pages = {
             'web_home': {
                 'routes': ['/', '/index.html', '/default.html'],
                 'params': {}
+            },
+            'healthz': {
+                'routes': ['/healthz']
             }
         }
         self.api_pages = {}
+        self.web_log_filter = ['HEAD /healthz']
+        self._shutdown_post_uuid = str(uuid.uuid4())
 
         # mapping of static path overrides and all static content pages
         self.static_pages = {}
@@ -106,15 +117,23 @@ class FlaskApp:
     def init(self):
         ''' Stop the running process and recreate all Flask objects.  Allows a complete reset of the Flask environment with all routes '''
         self.stop()
-        self.config = load_config_json(self.config_file)
+        self.config = load_config_json(self.config_file) if self.config_file is not None else {}
 
         # flask objects
         self.app = Flask(__name__, static_folder=self.config.get('static_dir', os.path.join(os.getcwd(), FLASK_DEFAULT_STATIC_DIR)), template_folder=self.site_data['templates_path'])
         self.web_static_dir = self.config.get('static_dir', FLASK_DEFAULT_STATIC_DIR)
         self.web_static_inc_subs = self.config.get('web_static_inc_subs', True)
-        self.async_mode = None
-        self.app.wsgi_app = ProxyFix(self.app.wsgi_app, x_proto=1, x_host=1)
-        self.socketio = SocketIO(self.app, async_mode=self.async_mode, cors_allowed_origins='*')
+        self.app.wsgi_app = ProxyFix(self.app.wsgi_app, **dict(x_proto=1, x_host=1, x_for=1, x_prefix=1) if self.config.get('behind_proxy', False) else {})
+        self.socketio = SocketIO(self.app, cors_allowed_origins=self.config.get('cors_allowed_origins', '*'))
+
+        # logging filter
+        self.web_log_filter = self.config.get('web_log_filter', self.web_log_filter)
+        if not isinstance(self.web_log_filter, list):
+            raise ValueError(f"web_log_filter mus be a list of string objects to match against logs. Got: {self.web_log_filter}")
+        web_log_filter_obj = FlaskLogFilter()
+        web_log_filter_obj.log_filter_list = self.web_log_filter
+        werkzeug_logger = logging.getLogger('werkzeug')
+        werkzeug_logger.addFilter(web_log_filter_obj)
 
         self.site_data['base_template'] = self.config.get('base_template', None) if self.config.get('base_template', None) in self.base_templates else None
         self.site_data['debug'] = self.config.get('debug', False)
@@ -128,10 +147,20 @@ class FlaskApp:
             if os.path.exists(os.path.join(self.site_data['templates_path'], '_base_template')):
                 os.unlink(os.path.join(self.site_data['templates_path'], '_base_template'))
             os.symlink(os.path.join(BASE_TEMPLATE_PATH, self.site_data.get('base_template')), os.path.join(self.site_data['templates_path'], '_base_template'))
-            self.site_data['site_template'] = os.path.join('_base_template', 'templates', self.site_data.get('site_template_file', 'base.html.j2'))
+            # set the base_template file to a local 'base.html.j2' file if it exists, otherwise use the template base file
+            if os.path.isfile(os.path.join(self.site_data['templates_path'], 'base.html.j2')):
+                self.site_data['site_template'] = 'base.html.j2' # path is relative to the 'templates' folder
+            else:
+                # if a 'site_template' is specified, use that
+                self.site_data['site_template'] = os.path.join('_base_template', 'templates', self.site_data.get('site_template', 'base.html.j2'))
         self.site_data.update(self.config.get('site_data', {}))
         self.web_pages.update(self.config.get('web_pages', {}))
         self.api_pages.update(self.config.get('api_pages', {}))
+
+        # add the shutdown endpoint
+        self._shutdown_post_uuid = str(uuid.uuid4())
+        self.web_pages.update({'shutdown_server': {'routes': [f'/shutdown_server'], 'params': {'methods': ['POST']}}})
+        self.app_logger.debug(f"Shutdown endpoint UUID: {self._shutdown_post_uuid}.  Shutdown server with POST to /shutdown_server wuth form endcoded 'UUID' parameter and value.")
         
         # create sym link for the app in addition to the base template
         if self.site_data.get('app_path', None) is not None and os.path.join(self.site_data.get('app_path', None), 'templates') != self.site_data['templates_path']:
@@ -232,14 +261,33 @@ class FlaskApp:
             self.static_pages[static_file.split(root_path)[1]] = static_file
             self.app.add_url_rule(static_file.split(root_path)[1], view_func=self.web_static_file, **self.static_page_args)
 
-    def start(self, ):
+    def shutdown_server(self):
+        ''' Execute a shutdown of the server, must be a POST and include the UUID in the body '''
+        if request.method == 'POST' and request.form.get('UUID', None) == self._shutdown_post_uuid:
+            if isinstance(self.socketio, SocketIO):
+                self.app_logger.info(f"Received shutdown request from {request.remote_addr}. Stopping services...")
+                self.socketio.stop()
+                return 'Services shutting down...\n', 200
+            else:
+                self.app_logger.error(f"Received shutdown request from {request.remote_addr}. Services not running!")
+                return "Services not available", 500
+        self.app_logger.critical(f"Received shutdown request from {request.remote_addr}. Missing proper UUID. Verify Proper usage.")
+        return 'ACCESS DENIED', 403
+
+    def start(self):
         ''' Start the Flask process in a thread '''
-        self.socketio.run(self.app,
-                          host=self.config.get('address', '0.0.0.0'),
-                          port=self.config.get('port', 8080),
-                          debug=self.config.get('debug', False),
-                          use_reloader=False)
-        sleep(5)
+        try:
+            self.socketio.run(self.app,
+                            host=self.config.get('address', '0.0.0.0'),
+                            port=self.config.get('port', 8080),
+                            debug=self.config.get('debug', False),
+                            use_reloader=False)
+            while True:
+                sleep(5)
+        except KeyboardInterrupt:
+            # CTRL+C will end the program
+            self.app_logger.info("CTRL+C Caught. Closing...")
+            self.stop()
 
     def render_template(self, template:str, page=None, **kwargs):
         ''' Render the requested template.  Automatically inserts base page data '''
@@ -260,7 +308,11 @@ class FlaskApp:
         pass
 
     def web_home(self):
-        return "<body>test123</body>" 
+        return "<body>test123</body>", 200
+
+    def healthz(self):
+        ''' Override if more complex healthcheck is required beyond 'the web service is operational' '''
+        return 'OK', 200
 
     def web_static_file(self):
         ''' Return a static file '''
