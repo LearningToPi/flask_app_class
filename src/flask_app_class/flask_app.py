@@ -1,5 +1,5 @@
-from flask import Flask, render_template, send_from_directory, g, session, send_file
-from flask import Flask, flash, redirect, render_template, request, session, abort, url_for
+from flask import Flask, render_template, send_from_directory, g, session, send_file, abort
+from flask import Flask, flash, redirect, render_template, request, session, abort, url_for, jsonify
 from flask_login import LoginManager, login_user, current_user, logout_user, login_required
 from urllib.parse import urlparse, urljoin
 import os
@@ -11,6 +11,7 @@ from threading import Lock, Thread
 from time import sleep
 import uuid
 import re, glob
+from typing import Callable
 from flask_socketio import SocketIO, emit, disconnect
 from werkzeug.middleware.proxy_fix import ProxyFix
 from logging_handler import create_logger, DEBUG, INFO, WARNING, ERROR, CRITICAL, _log_level_number
@@ -88,6 +89,12 @@ class FlaskApp:
         self.static_pages = {}
         self.static_page_args = {}
 
+        # shutdown flags
+        self._shutdown = False
+
+        # socketio holders
+        self._socketio_background_threads = {}
+
         self.init()
 
     @property
@@ -112,6 +119,10 @@ class FlaskApp:
         if self.config.get('auth', '').lower() == 'radius' or self.config.get('authentication', '').lower() == 'radius':
             from .user_radius import RadiusUserController
             self.user_controller = RadiusUserController(**self.config.get('radius'))
+            self.login_manager.user_loader(self.user_controller.get_user)
+        else:
+            from .user_generic import GenericUserController
+            self.user_controller = GenericUserController()
             self.login_manager.user_loader(self.user_controller.get_user)
 
     def init(self):
@@ -169,8 +180,8 @@ class FlaskApp:
             os.symlink(self.site_data.get('app_path'), os.path.join(self.site_data['templates_path'], '_app'))
 
         # configure login manager
-        if self.config.get('auth', None) != None or self.config.get('authentication', None) != None:
-            self.init_login_manager()
+        #if self.config.get('auth', None) != None or self.config.get('authentication', None) != None:
+        self.init_login_manager()
 
         # load or generate flask secret key
         if os.path.isfile(self.config.get('flask_secret_file', '.flask_secret')):
@@ -187,6 +198,29 @@ class FlaskApp:
         # configure dropdowns
         for dropdown_menu in self.config.get('dropdowns', []):
             self.add_dropdown(name=dropdown_menu.get('name', 'Menu'), items=dropdown_menu.get('items', []), replace=True)
+
+        # configure socketio handlers
+        for socketio_handler in self.config.get('socketio', []):
+            self.app_logger.info(f"{self.info_str}: Adding socketio handler: {socketio_handler}")
+            if socketio_handler.get('direction', 'out') == 'out':
+                # self.socketio.start_background_task(target=getattr(self, socketio_handler.get('handler')))
+                self.socketio.on_event("connect", self._socket_io_connect, socketio_handler.get('namespace', 'default'))
+
+    def _socket_io_connect(self):
+        ''' On a connect request, start the background thread if not currently running '''
+        if self.socketio:
+            self.app_logger.info(f"{self.info_str}: client connect for namespace {request.namespace}...") # pyright: ignore[reportAttributeAccessIssue]
+            try:
+                if isinstance(self._socketio_background_threads.get(request.namespace), Thread) and self._socketio_background_threads[request.namespace].is_alive(): # pyright: ignore[reportAttributeAccessIssue]
+                    self.app_logger.debug(f"{self.info_str}: socketio background thread already running")
+                else:
+                    socketio_config = [x for x in self.config['socketio'] if x.get('namespace') == request.namespace][0] # pyright: ignore[reportAttributeAccessIssue]
+                    self.app_logger.info(f"Starting background thread for {request.namespace}, socketio config: {socketio_config}...") # pyright: ignore[reportAttributeAccessIssue]
+                    self._socketio_background_threads[socketio_config.get('namespace')] = self.socketio.start_background_task(target=getattr(self, socketio_config.get('handler'))) # pyright: ignore[reportAttributeAccessIssue]
+            except Exception as e:
+                self.app_logger.error(f"SocketIO Connect error occured: {e.__class__.__name__}: {e}")
+        else:
+            self.app_logger.critical("SocketIO connect received, but socketio not running!")
 
     @property
     def dropdown_menus(self) -> list:
@@ -303,6 +337,10 @@ class FlaskApp:
         elif os.path.exists(os.path.join(self.site_data['templates_path'], '_app', 'templates', template)):
             return render_template(os.path.join('_app', template), site=self.site_data, page=self.web_pages[calling_func].get('data', {}) if page is None else page, **kwargs)
         return render_template(os.path.join('_base_template', 'templates', template), site=self.site_data, page=self.web_pages[calling_func].get('data', {}) if page is None else page, **kwargs)
+
+    def return_error(self, code:int=404):
+        ''' Return an error code '''
+        abort(code)
 
     def stop(self):
         pass
