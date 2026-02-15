@@ -4,7 +4,7 @@ function fill_div_part(div_id, path, parameters = {}) {
     var div_part = document.getElementById(div_id);
 
     console.log("Filling DIV Part: " + div_id + ', path: ' + path + ', paramters: ' + JSON.stringify(parameters));
-    $.ajax({
+    return $.ajax({
         type: "get",
         url: path,
         data: parameters,
@@ -14,7 +14,7 @@ function fill_div_part(div_id, path, parameters = {}) {
         },
         error: function(response) {
             console.log("FAILURE DIV Part: " + div_id + ', path: ' + path + ', paramters: ' + JSON.stringify(parameters) + ', error: ' + response.status);
-            testOutputBox.value = "FAILURE";
+            alert("Failed to fill screen parts. Check console log for more info.");
         }
     });
 
