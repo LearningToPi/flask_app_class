@@ -25,6 +25,9 @@ FLASK_SECRET_LENGTH = 128
 FLASK_DEFAULT_STATIC_DIR = 'static'
 BASE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'base_templates')
 
+SOCKETIO_DEFAULT_HANDLERS = {
+    "connect": "_socket_io_connect"
+}
 
 def load_config_json(config_file:str):
     ''' Load a json config file '''
@@ -94,6 +97,8 @@ class FlaskApp:
 
         # socketio holders
         self._socketio_background_threads = {}
+        self._socketio_clients = {}
+        self._socketio_client_lock = Lock()
 
         self.init()
 
@@ -202,25 +207,47 @@ class FlaskApp:
         # configure socketio handlers
         for socketio_handler in self.config.get('socketio', []):
             self.app_logger.info(f"{self.info_str}: Adding socketio handler: {socketio_handler}")
-            if socketio_handler.get('direction', 'out') == 'out':
-                # self.socketio.start_background_task(target=getattr(self, socketio_handler.get('handler')))
-                self.socketio.on_event("connect", self._socket_io_connect, socketio_handler.get('namespace', 'default'))
+            self._socketio_clients[socketio_handler.get('namespace', 'default')] = []
+            for handler, function in socketio_handler.get('handlers', {}).items():
+                self.socketio.on_event(handler, getattr(self, function), socketio_handler.get('namespace', 'default'))
+            #if socketio_handler.get('direction', 'out') == 'out':
+            #    self.socketio.on_event("connect", self._socket_io_connect, socketio_handler.get('namespace', 'default'))
 
     def _socket_io_connect(self):
         ''' On a connect request, start the background thread if not currently running '''
         if self.socketio:
             self.app_logger.info(f"{self.info_str}: client connect for namespace {request.namespace}...") # pyright: ignore[reportAttributeAccessIssue]
             try:
+                # add client to the list of clients for the namespace
+                with self._socketio_client_lock:
+                    if request.namespace not in self._socketio_clients: # pyright: ignore[reportAttributeAccessIssue]
+                        self._socketio_clients[request.namespace] = [] # pyright: ignore[reportAttributeAccessIssue]
+                    self._socketio_clients[request.namespace].append(request.sid) # pyright: ignore[reportAttributeAccessIssue]
+                self.app_logger.info(f"{self.info_str}: client connected for namespace {request.namespace}. Total clients for namespace: {len(self._socketio_clients[request.namespace])}") # pyright: ignore[reportAttributeAccessIssue]
+
                 if isinstance(self._socketio_background_threads.get(request.namespace), Thread) and self._socketio_background_threads[request.namespace].is_alive(): # pyright: ignore[reportAttributeAccessIssue]
                     self.app_logger.debug(f"{self.info_str}: socketio background thread already running")
                 else:
                     socketio_config = [x for x in self.config['socketio'] if x.get('namespace') == request.namespace][0] # pyright: ignore[reportAttributeAccessIssue]
                     self.app_logger.info(f"Starting background thread for {request.namespace}, socketio config: {socketio_config}...") # pyright: ignore[reportAttributeAccessIssue]
-                    self._socketio_background_threads[socketio_config.get('namespace')] = self.socketio.start_background_task(target=getattr(self, socketio_config.get('handler'))) # pyright: ignore[reportAttributeAccessIssue]
+                    self._socketio_background_threads[socketio_config.get('namespace')] = self.socketio.start_background_task(target=getattr(self, socketio_config.get('update_function'))) # pyright: ignore[reportAttributeAccessIssue]
             except Exception as e:
                 self.app_logger.error(f"SocketIO Connect error occured: {e.__class__.__name__}: {e}")
         else:
             self.app_logger.critical("SocketIO connect received, but socketio not running!")
+
+    def _socket_io_disconnect(self):
+        ''' On disconnect, remove the client from the list of clients for the namespace '''
+        if self.socketio:
+            self.app_logger.info(f"{self.info_str}: client disconnect for namespace {request.namespace}...") # pyright: ignore[reportAttributeAccessIssue]
+            with self._socketio_client_lock:
+                if request.namespace in self._socketio_clients and request.sid in self._socketio_clients[request.namespace]: # pyright: ignore[reportAttributeAccessIssue]
+                    self._socketio_clients[request.namespace].remove(request.sid) # pyright: ignore[reportAttributeAccessIssue]
+                    self.app_logger.info(f"{self.info_str}: client disconnected for namespace {request.namespace}. Total clients for namespace: {len(self._socketio_clients[request.namespace])}") # pyright: ignore[reportAttributeAccessIssue]
+                else:
+                    self.app_logger.warning(f"{self.info_str}: disconnect received for namespace {request.namespace} but client SID not found in client list!") # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            self.app_logger.critical("SocketIO disconnect received, but socketio not running!")
 
     @property
     def dropdown_menus(self) -> list:
