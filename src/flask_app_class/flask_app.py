@@ -326,12 +326,41 @@ class FlaskApp:
         self._add_flask_static_files(os.path.join(os.getcwd(), self.config.get('static_dir', FLASK_DEFAULT_STATIC_DIR)))
 
         # add dynamic pages
-        for page in self.web_pages:
-            for route in self.web_pages[page]['routes']:
-                self.app.add_url_rule(route, view_func=getattr(self, page), **self.web_pages[page].get('params', {}))
+        for page in self.web_pages: # pylint: disable=consider-using-dict-items
+            if hasattr(self, page):
+                for route in self.web_pages[page]['routes']:
+                    self.app.add_url_rule(route, view_func=getattr(self, page), **self.web_pages[page].get('params', {}))
+            else:
+                page_template = None
+                for route in self.web_pages[page]['routes']:
+                    if pathlib.Path(self.site_data['templates_path'] + route).is_file():
+                        page_template = route.strip("/")
+                    elif pathlib.Path(self.site_data['templates_path'] + route + '.j2').is_file():
+                        page_template = route.strip("/") + '.j2'
+
+                if page_template:
+                    self.app_logger.info(f"Web page '{page}' does not have a corresponding method in the Flask app.  Using default behavior.")
+                    # Create a dynamic view function bound to this template and page name
+                    def create_view(tpl=page_template, pg_name=page):
+                        def dynamic_view(**kwargs):
+                            return self.render_template(template=tpl, page=self.web_pages.get(pg_name, {}).get('data', {}), **kwargs)
+                        dynamic_view.__name__ = f"view_{pg_name}"
+                        return dynamic_view
+
+                    view_func = create_view()
+
+                    for route in self.web_pages[page]['routes']:
+                        self.app.add_url_rule(
+                            route,
+                            endpoint=f"{page}_{route.strip('/') or 'root'}",
+                            view_func=view_func,
+                            **self.web_pages[page].get('params', {})
+                        )
+                else:
+                    raise Exception(f"Web page '{page}' does not have a corresponding method in the Flask app and no template was found.")
 
         # add api pages
-        for page in self.api_pages:
+        for page in self.api_pages: # pylint: disable=consider-using-dict-items
             for route in self.api_pages[page]['routes']:
                 self.app.add_url_rule(route, view_func=getattr(self, page), **self.api_pages[page].get('params', {}))
 
