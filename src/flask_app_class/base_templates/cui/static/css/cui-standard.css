@@ -2433,7 +2433,7 @@ html {
   font-size: var(--cui-html-font-size); }
   html ::-webkit-scrollbar {
     width: 8px;
-    height: var(--cui-spacing-qtr); }
+    height: var(--cui-spacing-half); } /* changed from --cui-spacing-half to fix height of horizontal scroll bar */ 
   html ::-webkit-scrollbar-track {
     background: var(--cui-background-color); }
   html ::-webkit-scrollbar-thumb {
