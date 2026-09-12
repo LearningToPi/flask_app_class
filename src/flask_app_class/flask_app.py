@@ -1,3 +1,4 @@
+from venv import logger
 from flask import Flask, render_template, send_from_directory, g, session, send_file, abort
 from flask import Flask, flash, redirect, render_template, request, session, abort, url_for, jsonify
 from flask_login import LoginManager, login_user, current_user, logout_user, login_required
@@ -6,15 +7,14 @@ import os
 import json
 import inspect
 import logging
-from datetime import datetime, timedelta
 from threading import Lock, Thread
 from time import sleep
 import uuid
-import re, glob
-from typing import Callable
 from flask_socketio import SocketIO, emit, disconnect
 from werkzeug.middleware.proxy_fix import ProxyFix
 from logging_handler import create_logger, DEBUG, INFO, WARNING, ERROR, CRITICAL, _log_level_number
+from config_file_manager import ConfigDict, load_file
+
 
 '''
 ==================================
@@ -37,6 +37,8 @@ def load_config_json(config_file:str):
     return config_data
 
 
+
+
 class FlaskLogFilter(logging.Filter):
     ''' Class to handle filtering of web log mess '''
     log_filter_list = []
@@ -47,21 +49,33 @@ class FlaskLogFilter(logging.Filter):
             if filter in record.getMessage():
                 return False
         return True # don't filter!
+    
+
 
 class FlaskApp:
     ''' Class to hold and manage all the general flask related data and functions '''
-    def __init__(self, config_file:str|None=None, web_log_level:str=INFO, app_log_level:str=INFO, app_path=None,
+    def __init__(self, config:str|dict|ConfigDict, config_encryption_key:str|None=None, config_encryption_file:str|None=None, web_log_level:str=INFO, app_log_level:str=INFO, app_path=None,
                  templates_path=os.path.join(os.path.dirname(__file__), 'templates')):
-        # app config
-        self.config_file = config_file
-        self.config = {}
+        # Load the app config, if str, load the config file as a JSON, if dict, load the config from the dict, if ConfigManager, use the provided ConfigManager object
+        if isinstance(config, str):
+            self.config_file = config
+            self.config = load_file(filename=config, encryption_key=config_encryption_key.encode() if config_encryption_key is not None else None, encryption_key_file=config_encryption_file, save_on_change=False)
+        elif isinstance(config, dict):
+            self.config_file = None
+            self.config = ConfigDict(encryption_key=config_encryption_key.encode() if config_encryption_key is not None else None, encryption_key_file=config_encryption_file, save_on_change=False)
+            self.config.load_config(config)
+        elif isinstance(config, ConfigDict):
+            self.config_file = None
+            self.config = config
+        else:
+            raise TypeError("config must be a string (path to JSON file), a dict, or a ConfigDict object")
+
+        # init objects
         self._templates = None
         self.site_data = {
             'templates_path': os.path.abspath(templates_path),
             'app_path': app_path,
             }
-
-        # init objects
         self.app = None
         self.login_manager = None
         self.async_mode = None
@@ -100,7 +114,7 @@ class FlaskApp:
         self._socketio_clients = {}
         self._socketio_client_lock = Lock()
 
-        self.init()
+        self.init_flask()
 
     @property
     def base_templates(self):
@@ -123,17 +137,16 @@ class FlaskApp:
         self.login_manager.init_app(self.app)
         if self.config.get('auth', '').lower() == 'radius' or self.config.get('authentication', '').lower() == 'radius':
             from .user_radius import RadiusUserController
-            self.user_controller = RadiusUserController(**self.config.get('radius'))
+            self.user_controller = RadiusUserController(**self.config.get('radius',{}))
             self.login_manager.user_loader(self.user_controller.get_user)
         else:
             from .user_generic import GenericUserController
             self.user_controller = GenericUserController()
             self.login_manager.user_loader(self.user_controller.get_user)
 
-    def init(self):
+    def init_flask(self):
         ''' Stop the running process and recreate all Flask objects.  Allows a complete reset of the Flask environment with all routes '''
         self.stop()
-        self.config = load_config_json(self.config_file) if self.config_file is not None else {}
 
         # flask objects
         self.app = Flask(__name__, static_folder=self.config.get('static_dir', os.path.join(os.getcwd(), FLASK_DEFAULT_STATIC_DIR)), template_folder=self.site_data['templates_path'])
@@ -162,7 +175,7 @@ class FlaskApp:
         if self.site_data.get('base_template', None) is not None:
             if os.path.exists(os.path.join(self.site_data['templates_path'], '_base_template')):
                 os.unlink(os.path.join(self.site_data['templates_path'], '_base_template'))
-            os.symlink(os.path.join(BASE_TEMPLATE_PATH, self.site_data.get('base_template')), os.path.join(self.site_data['templates_path'], '_base_template'))
+            os.symlink(os.path.join(BASE_TEMPLATE_PATH, self.site_data.get('base_template', '')), os.path.join(self.site_data['templates_path'], '_base_template'))
             # set the base_template file to a local 'base.html.j2' file if it exists, otherwise use the template base file
             if os.path.isfile(os.path.join(self.site_data['templates_path'], 'base.html.j2')):
                 self.site_data['site_template'] = 'base.html.j2' # path is relative to the 'templates' folder
@@ -296,7 +309,9 @@ class FlaskApp:
     def update_flask_routes(self, reinit=False):
         ''' Update the flask routes '''
         if reinit or self.app is None:
-            self.init()
+            self.init_flask()
+        if self.app is None:
+            raise Exception("Flask app is not initialized.  Cannot update routes.")
         # add base template static files
         if self.site_data.get('base_template', None) is not None and os.path.isdir(os.path.join(self.site_data['templates_path'], '_base_template', 'static')):
             self._add_flask_static_files(os.path.join(self.site_data['templates_path'], '_base_template', 'static'))
@@ -318,6 +333,8 @@ class FlaskApp:
 
     def _add_flask_static_files(self, root_path):
         ''' Loop through all files in the path specified and add as static files.  If '_base_template', files will be added WITHOUT the '_base_template' in the route '''
+        if self.app is None:
+            raise Exception("Flask app is not initialized.  Cannot update routes.")
         for static_file in get_all_files(root_path, True):
             self.static_pages[static_file.split(root_path)[1]] = static_file
             self.app.add_url_rule(static_file.split(root_path)[1], view_func=self.web_static_file, **self.static_page_args)
@@ -338,6 +355,10 @@ class FlaskApp:
     def start(self):
         ''' Start the Flask process in a thread '''
         try:
+            while self.socketio is None:
+                temp_logger = create_logger(name=os.path.basename(__file__))
+                temp_logger.debug(f"{self.info_str}: Waiting for socketio to initialize...")
+                sleep(1)
             self.socketio.run(self.app,
                             host=self.config.get('address', '0.0.0.0'),
                             port=self.config.get('port', 8080),
