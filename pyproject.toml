@@ -1,6 +1,6 @@
 [project]
 name = "flask_app_class"
-version = "0.1.4"
+version = "0.1.5"
 description = "Class based tool to build Flask applications that include socketio and authentication"
 authors = [{name = "Thomas Dunteman", email= "git@learningtopi.com"}]
 keywords = ["flask", "socketio"]

@@ -9,6 +9,7 @@ import inspect
 import logging
 from threading import Lock, Thread
 from time import sleep
+import pathlib
 import uuid
 from flask_socketio import SocketIO, emit, disconnect
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -57,9 +58,12 @@ class FlaskApp:
     def __init__(self, config:str|dict|ConfigDict, config_encryption_key:str|None=None, config_encryption_file:str|None=None, web_log_level:str=INFO, app_log_level:str=INFO, app_path=None,
                  templates_path=os.path.join(os.path.dirname(__file__), 'templates')):
         # Load the app config, if str, load the config file as a JSON, if dict, load the config from the dict, if ConfigManager, use the provided ConfigManager object
-        if isinstance(config, str):
+        if isinstance(config, pathlib.Path):
+            self.config_file = str(config)
+            self.config = load_file(filename=self.config_file, encryption_key=config_encryption_key.encode() if config_encryption_key is not None else None, encryption_key_file=config_encryption_file, save_on_change=False)
+        elif isinstance(config, str):
             self.config_file = config
-            self.config = load_file(filename=config, encryption_key=config_encryption_key.encode() if config_encryption_key is not None else None, encryption_key_file=config_encryption_file, save_on_change=False)
+            self.config = load_file(filename=self.config_file, encryption_key=config_encryption_key.encode() if config_encryption_key is not None else None, encryption_key_file=config_encryption_file, save_on_change=False)
         elif isinstance(config, dict):
             self.config_file = None
             self.config = ConfigDict(encryption_key=config_encryption_key.encode() if config_encryption_key is not None else None, encryption_key_file=config_encryption_file, save_on_change=False)
