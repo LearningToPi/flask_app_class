@@ -41,6 +41,7 @@ import os
 import socket
 import logging
 import struct
+import hmac
 
 from select import select
 from random import randint
@@ -148,6 +149,7 @@ ATTR_LOGIN_LAT_PORT = 63
 # ADDED - tdunteman
 ATTR_TUNNEL_TYPE = 64
 ATTR_TUNNEL_MEDIUM_TYPE = 65
+ATTR_MESSAGE_AUTHENTICATOR = 80
 ATTR_TUNNEL_PRIVATE_GROUP_ID = 81
 # END ADDED
 
@@ -197,6 +199,7 @@ ATTRS = {
     # ADDED - tdunteman
     ATTR_TUNNEL_TYPE: 'Tunnel-Type',
     ATTR_TUNNEL_MEDIUM_TYPE: 'Tunnel-Medium-Type',
+    ATTR_MESSAGE_AUTHENTICATOR: 'Message-Authenticator',
     ATTR_TUNNEL_PRIVATE_GROUP_ID: 'Tunnel-Private-Group-ID'
     # END ADDED
 }
@@ -449,11 +452,39 @@ class Message(object):
         attrs = self.attributes.pack()
         data = []
         # Now pack the code, id, total length, authenticator
-        data.append(struct.pack('!BBH16s', self.code, self.id,
-                    len(attrs) + 20, self.authenticator))
+        packet = struct.pack('!BBH16s', self.code, self.id,
+                             len(attrs) + 20, self.authenticator) + attrs
+        if ATTR_MESSAGE_AUTHENTICATOR in self.attributes:
+            packet = self._message_authenticator_packet(packet)
+            digest = hmac.new(self.secret, packet, md5).digest()
+            offset = self._message_authenticator_offset(packet)
+            packet = packet[:offset] + digest + packet[offset + 16:]
         # Attributes take up the remainder of the message.
-        data.append(attrs)
-        return join(data)
+        return packet
+
+    @staticmethod
+    def _message_authenticator_offset(data):
+        """Return the value offset of Attribute 80 in an encoded packet."""
+        pos = 20
+        while pos < len(data):
+            code, length = struct.unpack('BB', data[pos:pos + 2])
+            if length < 2 or pos + length > len(data):
+                raise ValueError('Invalid RADIUS attribute length')
+            if code == ATTR_MESSAGE_AUTHENTICATOR:
+                if length != 18:
+                    raise ValueError('Message-Authenticator must be 16 bytes')
+                return pos + 2
+            pos += length
+        raise ValueError('Message-Authenticator attribute is missing')
+
+    @classmethod
+    def _message_authenticator_packet(cls, data, authenticator=None):
+        """Return the packet input used to calculate Message-Authenticator."""
+        offset = cls._message_authenticator_offset(data)
+        if authenticator is None:
+            authenticator = data[4:20]
+        data = data[:4] + authenticator + data[20:]
+        return data[:offset] + (b'\0' * 16) + data[offset + 16:]
 
     @staticmethod
     def unpack(secret, data):
@@ -476,6 +507,12 @@ class Message(object):
         signature = md5(
             data[:4] + self.authenticator + data[20:] + self.secret).digest()
         assert signature == data[4:20], 'Invalid authenticator'
+        if ATTR_MESSAGE_AUTHENTICATOR in Attributes.unpack(data[20:]):
+            packet = self._message_authenticator_packet(data, self.authenticator)
+            expected = hmac.new(self.secret, packet, md5).digest()
+            offset = self._message_authenticator_offset(data)
+            assert hmac.compare_digest(expected, data[offset:offset + 16]), \
+                'Invalid Message-Authenticator'
         return Message.unpack(self.secret, data)
 
 
