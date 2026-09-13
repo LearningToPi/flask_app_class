@@ -42,7 +42,7 @@ class FlaskUserController:
         ''' Create a new user in the underlying system '''
         return NotImplemented
 
-    def delete_user(user_id):
+    def delete_user(self, user_id):
         ''' Delete a user in the underlying system ''' 
         return NotImplemented
 
@@ -63,7 +63,7 @@ class FlaskUser(UserMixin):
     @property
     def is_active(self):
         ''' is_active returns True if the account is active (not suspended or rejected for reasons other than auth) '''
-        return self._user_data[4]
+        return self._user_data[3]
 
     @property
     def username(self):
@@ -71,7 +71,7 @@ class FlaskUser(UserMixin):
 
     @property
     def name(self):
-        return self.user_data[1]
+        return self._user_data[1]
 
     @property
     def is_authenticated(self):

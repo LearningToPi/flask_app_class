@@ -51,6 +51,6 @@ class RadiusUserController(FlaskUserController):
 
     def get_user(self, user_id=None):
         ''' Find a user from a user_id - Currently requires the user list '''
-        if user_id in self.user_table:
-            return FlaskUser(user_id, user_id, False, False)
+        if len(self.user_table) == 0 or user_id in self.user_table:
+            return FlaskUser(user_id, user_id, True, True)
         return None

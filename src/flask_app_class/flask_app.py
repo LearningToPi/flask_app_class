@@ -3,6 +3,7 @@ from flask import Flask, render_template, send_from_directory, g, session, send_
 from flask import Flask, flash, redirect, render_template, request, session, abort, url_for, jsonify
 from flask_login import LoginManager, login_user, current_user, logout_user, login_required
 from urllib.parse import urlparse, urljoin
+from .user_controller import FlaskUserController, FlaskUser
 import os
 import json
 import inspect
@@ -148,6 +149,81 @@ class FlaskApp:
             self.user_controller = GenericUserController()
             self.login_manager.user_loader(self.user_controller.get_user)
 
+        # Check to see if the app has a 'login_user' route defined
+        login_user_route_defined = False
+        for page in self.web_pages: # pylint: disable=consider-using-dict-items
+            for route in self.web_pages[page]['routes']:
+                if route == '/login_user':
+                    login_user_route_defined = True
+        if not login_user_route_defined:
+            self.app.add_url_rule('/login_user', view_func=getattr(self, '_login_user'), methods=['POST']) # pyright: ignore[reportOptionalMemberAccess]
+
+            # Create a dynamic view function bound to this template and page name
+            def create_view(tpl='login.html', pg_name=page):
+                def dynamic_view(**kwargs):
+                    return self.render_template(template=tpl, page=self.web_pages.get(pg_name, {}).get('data', {}), **kwargs)
+                dynamic_view.__name__ = f"view_{pg_name}"
+                return dynamic_view
+
+            view_func = create_view()
+
+            self.app_logger.info("Using generic login function as the default login handler")
+            self.app.add_url_rule(
+                '/login.html',
+                endpoint=f"{page}_login.html",
+                view_func=view_func,
+                methods=['GET'])
+
+        # Add a logout route if not already defined
+        logout_user_route_defined = False
+        for page in self.web_pages: # pylint: disable=consider-using-dict-items
+            for route in self.web_pages[page]['routes']:
+                if route == '/logout_user':
+                    logout_user_route_defined = True
+        if not logout_user_route_defined:
+            self.app_logger.info("Using generic logout function as the default logout handler")
+            self.app.add_url_rule('/logout_user', view_func=getattr(self, '_logout_user'), methods=['GET']) # pyright: ignore[reportOptionalMemberAccess]
+
+    def _login_user(self, *args, **kwargs):
+        ''' Generic login function that can be used with the login manager if an app does not provide its own.  Must be a POST '''
+        if not isinstance(self.user_controller, FlaskUserController):
+            raise TypeError("User controller must be an instance of FlaskUserController")
+        if str(request.form['username']).isalnum():
+            usr_obj = self.user_controller.authenticate_user(request.form['username'].lower(), request.form['password'])
+            if usr_obj is not None:
+                # auth ok
+                session['logged_in'] = True
+                if 'rememberme' in request.form:
+                    if request.form['rememberme'] == 'on':
+                        # remember me on
+                        login_user(usr_obj, remember=True)
+                    else:
+                        login_user(usr_obj, remember=False)
+                else:
+                    login_user(usr_obj, remember=False)
+            else:
+                flash("ERROR;;Login Failure;;Wrong username or password!")
+                flash("INFO;;Login Info;;Be sure to use your RADIUS (aka Wireless) credentials")
+                return redirect('/login.html')
+        else:
+            flash("ERROR;;Login Failure;;Wrong username or password!")
+            flash("INFO;;Login Info;;Be sure to use your RADIUS (aka Wireless) credentials")
+            return redirect('/login.html')
+
+        # if no next url was passed, go to home
+        if request.form.get('nextUrl') == '':
+            return redirect('/')
+        else:
+            if not is_safe_url(request.form.get('nextUrl')):
+                return abort(400)
+            return redirect(request.form.get('nextUrl', '/'))
+
+    def _logout_user(self):
+        ''' Log out the current user and clear the session '''
+        session['logged_in'] = False
+        logout_user()
+        return self.render_template('/logout.html.j2')
+
     def init_flask(self):
         ''' Stop the running process and recreate all Flask objects.  Allows a complete reset of the Flask environment with all routes '''
         self.stop()
@@ -173,7 +249,7 @@ class FlaskApp:
         self.site_data['auth'] = self.config.get('auth', None)
         if self.site_data['auth'] is not None:
             self.site_data['login_page'] = self.config.get('login_page', '/login.html')
-            self.site_data['logout_page'] = self.config.get('login_page', '/logout.html')
+            self.site_data['logout_page'] = self.config.get('login_page', '/logout_user')
 
         # configure the site template by creating a sym-link to the base template under the Flask site templates (Flask requires all templates to be in 1 dir)
         if self.site_data.get('base_template', None) is not None:
@@ -275,9 +351,9 @@ class FlaskApp:
 
     def remove_dropdown(self, name:str):
         ''' Deletes a dropdown based on the display name '''
-        for i in range(len(self.dropdown_menus)):
+        for i in range(len(self.dropdown_menus)): # pylint: disable=consider-using-enumerate
             if self.dropdown_menus[i]['name'] == name:
-                self.dropdown_menus.remove(i)
+                self.dropdown_menus.pop(i)  # pylint: disable=consider-using-enumerate
                 return
 
     def add_dropdown(self, name:str, items:list, replace=True):
@@ -289,9 +365,9 @@ class FlaskApp:
                 ] '''
         if replace:
             self.remove_dropdown(name)
-        for i in range(len(self.dropdown_menus)):
+        for i in range(len(self.dropdown_menus)): # pylint: disable=consider-using-enumerate
             if self.dropdown_menus[i]['name'] == name:
-                for k in range(len(items)):
+                for k in range(len(items)):  # pylint: disable=consider-using-enumerate
                     for j in range(len(self.dropdown_menus[i].get('items',[]))):
                         if self.dropdown_menus[i]['items'][j].get('name') == items[k].get('name'):
                             dict(self.dropdown_menus[i]['items'][j]).update(items[k])
@@ -408,16 +484,21 @@ class FlaskApp:
         ''' Render the requested template.  Automatically inserts base page data '''
         # get function name of the calling function
         stack = inspect.stack()
-        for x in range(len(stack)):
+        for x in range(len(stack)): # pylint: disable=consider-using-enumerate
             if stack[x].function == 'render_template':
                 break
-        if x + 1 < len(stack):
-            calling_func = stack[x+1].function
+        calling_func = stack[x+1].function if x + 1 < len(stack) else None
+
+
         if os.path.exists(os.path.join(self.site_data['templates_path'], template)):
-            return render_template(template, site=self.site_data, page=self.web_pages[calling_func].get('data', {}) if page is None else page, **kwargs)
+            return render_template(template, site=self.site_data, page=self.web_pages.get(calling_func, {}).get('data', {}) if page is None else page, **kwargs)
+        elif os.path.exists(os.path.join(self.site_data['templates_path'], template.strip('.j2'))):
+            return render_template(template.strip('.j2'), site=self.site_data, page=self.web_pages.get(calling_func, {}).get('data', {}) if page is None else page, **kwargs)
+        elif os.path.exists(os.path.join(self.site_data['templates_path'], template + '.j2')):
+            return render_template(template + '.j2', site=self.site_data, page=self.web_pages.get(calling_func, {}).get('data', {}) if page is None else page, **kwargs)
         elif os.path.exists(os.path.join(self.site_data['templates_path'], '_app', 'templates', template)):
-            return render_template(os.path.join('_app', template), site=self.site_data, page=self.web_pages[calling_func].get('data', {}) if page is None else page, **kwargs)
-        return render_template(os.path.join('_base_template', 'templates', template), site=self.site_data, page=self.web_pages[calling_func].get('data', {}) if page is None else page, **kwargs)
+            return render_template(os.path.join('_app', template), site=self.site_data, page=self.web_pages.get(calling_func, {}).get('data', {}) if page is None else page, **kwargs)
+        return render_template(os.path.join('_base_template', 'templates', template), site=self.site_data, page=self.web_pages.get(calling_func, {}).get('data', {}) if page is None else page, **kwargs)
 
     def return_error(self, code:int=404):
         ''' Return an error code '''
