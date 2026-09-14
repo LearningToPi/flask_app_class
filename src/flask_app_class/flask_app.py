@@ -253,9 +253,12 @@ class FlaskApp:
 
         # configure the site template by creating a sym-link to the base template under the Flask site templates (Flask requires all templates to be in 1 dir)
         if self.site_data.get('base_template', None) is not None:
-            if os.path.exists(os.path.join(self.site_data['templates_path'], '_base_template')):
-                os.unlink(os.path.join(self.site_data['templates_path'], '_base_template'))
-            os.symlink(os.path.join(BASE_TEMPLATE_PATH, self.site_data.get('base_template', '')), os.path.join(self.site_data['templates_path'], '_base_template'))
+            try:
+                if os.path.exists(os.path.join(self.site_data['templates_path'], '_base_template')):
+                    os.unlink(os.path.join(self.site_data['templates_path'], '_base_template'))
+                os.symlink(os.path.join(BASE_TEMPLATE_PATH, self.site_data.get('base_template', '')), os.path.join(self.site_data['templates_path'], '_base_template'))
+            except:
+                pass
             # set the base_template file to a local 'base.html.j2' file if it exists, otherwise use the template base file
             if os.path.isfile(os.path.join(self.site_data['templates_path'], 'base.html.j2')):
                 self.site_data['site_template'] = 'base.html.j2' # path is relative to the 'templates' folder
@@ -455,8 +458,8 @@ class FlaskApp:
         if self.app is None:
             raise Exception("Flask app is not initialized. Cannot update routes.")
         for static_file in get_all_files(root_path, True):
-            self.static_pages[static_file.split(root_path)[1]] = static_file
-            self.app.add_url_rule(static_file.split(root_path)[1], view_func=self.web_static_file, **self.static_page_args)
+            self.static_pages[static_file.split(root_path)[1].replace('\\', '/')] = static_file
+            self.app.add_url_rule(static_file.split(root_path)[1].replace('\\', '/'), view_func=self.web_static_file, **self.static_page_args)
 
     def shutdown_server(self):
         ''' Execute a shutdown of the server, must be a POST and include the UUID in the body '''
