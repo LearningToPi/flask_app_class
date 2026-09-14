@@ -295,7 +295,7 @@ class FlaskApp:
 
         # configure dropdowns
         for dropdown_menu in self.config.get('dropdowns', []):
-            self.add_dropdown(name=dropdown_menu.get('name', 'Menu'), items=dropdown_menu.get('items', []), replace=True)
+            self.add_dropdown(name=dropdown_menu.get('name', 'Menu'), items=dropdown_menu.get('items', []), replace=True, login_required=dropdown_menu.get('login_required', False))
 
         # configure socketio handlers
         for socketio_handler in self.config.get('socketio', []):
@@ -356,7 +356,7 @@ class FlaskApp:
                 self.dropdown_menus.pop(i)  # pylint: disable=consider-using-enumerate
                 return
 
-    def add_dropdown(self, name:str, items:list, replace=True):
+    def add_dropdown(self, name:str, items:list, replace=True, login_required=False):
         ''' Add a dropdown to the list of dropdown menus.  Replace will replace the existing menu definition with the provided definition
             Items format: [
                     {'name': '[Display name]',
@@ -376,7 +376,7 @@ class FlaskApp:
                     self.dropdown_menus[i]['items'].append(items[k])
                     return
         # if we didn't run an update, add the menu
-        self.dropdown_menus.append({'name': name, 'items': items})
+        self.dropdown_menus.append({'name': name, 'items': items, 'login_required': login_required})
 
     @property
     def info_str(self):
@@ -391,7 +391,7 @@ class FlaskApp:
         if reinit or self.app is None:
             self.init_flask()
         if self.app is None:
-            raise Exception("Flask app is not initialized.  Cannot update routes.")
+            raise Exception("Flask app is not initialized. Cannot update routes.")
         # add base template static files
         if self.site_data.get('base_template', None) is not None and os.path.isdir(os.path.join(self.site_data['templates_path'], '_base_template', 'static')):
             self._add_flask_static_files(os.path.join(self.site_data['templates_path'], '_base_template', 'static'))
@@ -403,9 +403,14 @@ class FlaskApp:
 
         # add dynamic pages
         for page in self.web_pages: # pylint: disable=consider-using-dict-items
+            is_login_required = self.web_pages[page].get('login_required', False)
+
             if hasattr(self, page):
+                view_func = getattr(self, page)
+                if is_login_required:
+                    view_func = login_required(view_func)
                 for route in self.web_pages[page]['routes']:
-                    self.app.add_url_rule(route, view_func=getattr(self, page), **self.web_pages[page].get('params', {}))
+                    self.app.add_url_rule(route, view_func=view_func, **self.web_pages[page].get('params', {}))
             else:
                 page_template = None
                 for route in self.web_pages[page]['routes']:
@@ -415,7 +420,7 @@ class FlaskApp:
                         page_template = route.strip("/") + '.j2'
 
                 if page_template:
-                    self.app_logger.info(f"Web page '{page}' does not have a corresponding method in the Flask app.  Using default behavior.")
+                    self.app_logger.info(f"Web page '{page}' does not have a corresponding method in the Flask app. Using default behavior.")
                     # Create a dynamic view function bound to this template and page name
                     def create_view(tpl=page_template, pg_name=page):
                         def dynamic_view(**kwargs):
@@ -424,6 +429,8 @@ class FlaskApp:
                         return dynamic_view
 
                     view_func = create_view()
+                    if is_login_required:
+                        view_func = login_required(view_func)
 
                     for route in self.web_pages[page]['routes']:
                         self.app.add_url_rule(
@@ -437,13 +444,16 @@ class FlaskApp:
 
         # add api pages
         for page in self.api_pages: # pylint: disable=consider-using-dict-items
+            view_func = getattr(self, page)
+            if self.api_pages[page].get('login_required', False):
+                view_func = login_required(view_func)
             for route in self.api_pages[page]['routes']:
-                self.app.add_url_rule(route, view_func=getattr(self, page), **self.api_pages[page].get('params', {}))
+                self.app.add_url_rule(route, view_func=view_func, **self.api_pages[page].get('params', {}))
 
     def _add_flask_static_files(self, root_path):
         ''' Loop through all files in the path specified and add as static files.  If '_base_template', files will be added WITHOUT the '_base_template' in the route '''
         if self.app is None:
-            raise Exception("Flask app is not initialized.  Cannot update routes.")
+            raise Exception("Flask app is not initialized. Cannot update routes.")
         for static_file in get_all_files(root_path, True):
             self.static_pages[static_file.split(root_path)[1]] = static_file
             self.app.add_url_rule(static_file.split(root_path)[1], view_func=self.web_static_file, **self.static_page_args)

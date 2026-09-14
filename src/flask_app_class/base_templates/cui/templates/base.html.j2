@@ -30,14 +30,16 @@
                             <a href="{{ site.login_page }}" class="header-item">Login</a>
                             {%- endif -%}
                             {% for dropdown in site.dropdowns|default([{'name': 'Sample Menu', 'items': [{'name': 'LearningToPi.com', 'url': 'https://learningtopi.com', 'newtab': true}]}]) %}
-                            <div class="dropdown dropdown--left header-item">
-                                <a>{{ dropdown.name }}</a>
-                                <div class="dropdown__menu">
-                                    {% for link in dropdown['items']|default([]) %}
-                                    <a href="{{ link.url }}" {% if link.newtab|default(False) %}target="_blank"{% endif %}>{{ link.name }}</a>
-                                    {% endfor %}
-                                </div>
-                            </div>
+                                {% if not (dropdown.login_required|default(False)) or (dropdown.login_required and current_user.is_authenticated) %}
+                                    <div class="dropdown dropdown--left header-item">
+                                        <a>{{ dropdown.name }}</a>
+                                        <div class="dropdown__menu">
+                                            {% for link in dropdown['items']|default([]) %}
+                                            <a href="{{ link.url }}" {% if link.newtab|default(False) %}target="_blank"{% endif %}>{{ link.name }}</a>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                {% endif %}
                             {% endfor %}
                             {% if site.theme_switcher|default(True) %}
                             <div id="themeSwitcher" class="dropdown dropdown--left header-item">
