@@ -104,6 +104,7 @@ class FlaskApp:
             }
         }
         self.api_pages = {}
+        self.filters = {}
         self.web_log_filter = ['HEAD /healthz']
         self._shutdown_post_uuid = str(uuid.uuid4())
 
@@ -268,6 +269,7 @@ class FlaskApp:
         self.site_data.update(self.config.get('site_data', {}))
         self.web_pages.update(self.config.get('web_pages', {}))
         self.api_pages.update(self.config.get('api_pages', {}))
+        self.filters.update(self.config.get('filters', {}))
 
         # add the shutdown endpoint
         self._shutdown_post_uuid = str(uuid.uuid4())
@@ -295,6 +297,7 @@ class FlaskApp:
                 self.app_logger.info(f"{self.info_str}: Writing flask secret file {self.config.get('flask_secret_file', '.flask_secret')}")
                 output_file.write(self.app.secret_key)
         self.update_flask_routes(reinit=False)
+        self.init_template_filters()
 
         # configure dropdowns
         for dropdown_menu in self.config.get('dropdowns', []):
@@ -452,6 +455,15 @@ class FlaskApp:
                 view_func = login_required(view_func)
             for route in self.api_pages[page]['routes']:
                 self.app.add_url_rule(route, view_func=view_func, **self.api_pages[page].get('params', {}))
+
+    def init_template_filters(self):
+        ''' Register Jinja2 template filters defined in self.filters (config section 'filters'), equivalent to the @app.template_filter() decorator '''
+        if self.app is None:
+            raise Exception("Flask app is not initialized.  Cannot register template filters.")
+        for filter_name in self.filters: # pylint: disable=consider-using-dict-items
+            if not hasattr(self, filter_name):
+                raise Exception(f"Template filter '{filter_name}' does not have a corresponding method in the Flask app.")
+            self.app.add_template_filter(getattr(self, filter_name), name=self.filters[filter_name].get('name', filter_name))
 
     def _add_flask_static_files(self, root_path):
         ''' Loop through all files in the path specified and add as static files.  If '_base_template', files will be added WITHOUT the '_base_template' in the route '''
