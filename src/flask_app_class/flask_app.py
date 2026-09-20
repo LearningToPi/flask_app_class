@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urljoin
 from .user_controller import FlaskUserController, FlaskUser
 import os
 import json
+import pathlib
 import inspect
 import logging
 from threading import Lock, Thread
@@ -406,6 +407,9 @@ class FlaskApp:
             self._add_flask_static_files(os.path.join(self.site_data['templates_path'], '_app', 'static'))
         # add static files from the project
         self._add_flask_static_files(os.path.join(os.getcwd(), self.config.get('static_dir', FLASK_DEFAULT_STATIC_DIR)))
+        # add static files from the directory where the templates are located
+        if pathlib.Path(str(pathlib.Path(self.site_data['templates_path']).parent) + '/static').is_dir():
+            self._add_flask_static_files(str(pathlib.Path(self.site_data['templates_path']).parent) + '/static')
 
         # add dynamic pages
         for page in self.web_pages: # pylint: disable=consider-using-dict-items
