@@ -8,5 +8,5 @@ parser.add_argument("--config", type=str, default=None, help='Enter a JSON confi
 parser.add_argument("--log_level", type=str, default='DEBUG', help='Enter a logging level ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")')
 args = parser.parse_args()
 
-app = FlaskApp(config_file=args.config, web_log_level=args.log_level, app_log_level=args.log_level)
+app = FlaskApp(config=args.config, web_log_level=args.log_level, app_log_level=args.log_level)
 app.start()
