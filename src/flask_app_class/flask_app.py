@@ -58,7 +58,7 @@ class FlaskLogFilter(logging.Filter):
 class FlaskApp:
     ''' Class to hold and manage all the general flask related data and functions '''
     def __init__(self, config:str|dict|ConfigDict, config_encryption_key:str|None=None, config_encryption_file:str|None=None, web_log_level:str=INFO, app_log_level:str=INFO, app_path=None,
-                 templates_path=os.path.join(os.path.dirname(__file__), 'templates')):
+                 templates_path=os.path.join(os.path.dirname(__file__), 'templates'), config_overrides:None|dict=None):
         # Load the app config, if str, load the config file as a JSON, if dict, load the config from the dict, if ConfigManager, use the provided ConfigManager object
         if isinstance(config, pathlib.Path):
             self.config_file = str(config)
@@ -75,6 +75,10 @@ class FlaskApp:
             self.config = config
         else:
             raise TypeError("config must be a string (path to JSON file), a dict, or a ConfigDict object")
+
+        # apply config overrides if provided
+        if config_overrides is not None:
+            self.config.load_config(config_overrides)
 
         # init objects
         self._templates = None
