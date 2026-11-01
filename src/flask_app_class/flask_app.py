@@ -329,8 +329,9 @@ class FlaskApp:
                     self.app_logger.debug(f"{self.info_str}: socketio background thread already running")
                 else:
                     socketio_config = [x for x in self.config['socketio'] if x.get('namespace') == request.namespace][0] # pyright: ignore[reportAttributeAccessIssue]
-                    self.app_logger.info(f"Starting background thread for {request.namespace}, socketio config: {socketio_config}...") # pyright: ignore[reportAttributeAccessIssue]
-                    self._socketio_background_threads[socketio_config.get('namespace')] = self.socketio.start_background_task(target=getattr(self, socketio_config.get('update_function'))) # pyright: ignore[reportAttributeAccessIssue]
+                    if 'update_function' in socketio_config:
+                        self.app_logger.info(f"Starting background thread for {request.namespace}, socketio config: {socketio_config}...") # pyright: ignore[reportAttributeAccessIssue]
+                        self._socketio_background_threads[socketio_config.get('namespace')] = self.socketio.start_background_task(target=getattr(self, socketio_config.get('update_function'))) # pyright: ignore[reportAttributeAccessIssue]
             except Exception as e:
                 self.app_logger.error(f"SocketIO Connect error occured: {e.__class__.__name__}: {e}")
         else:
