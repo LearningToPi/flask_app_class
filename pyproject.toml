@@ -1,6 +1,6 @@
 [project]
 name = "flask_app_class"
-version = "0.1.7"
+version = "0.1.8"
 description = "Class based tool to build Flask applications that include socketio and authentication"
 authors = [{name = "Thomas Dunteman", email= "git@learningtopi.com"}]
 keywords = ["flask", "socketio"]
@@ -34,5 +34,5 @@ test_mounts = "local/settings.json:local/settings.json"
 include-package-data = true
 
 [tool.setuptools.package-data]
-# Keeps all non-Python files inside "my_package/templates/" and "my_package/static/"
-"flask_app_class" = ["templates/**/*", "base_templates/**/*"] 
+"flask_app_class" = ["templates/**/*", "base_templates/**/*"]
+
