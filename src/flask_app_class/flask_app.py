@@ -78,7 +78,8 @@ class FlaskApp:
 
         # apply config overrides if provided
         if config_overrides is not None:
-            self.config.load_config(config_overrides)
+            for k, v in config_overrides.items():
+                self.config[k] = v
 
         # init objects
         self._templates = None
